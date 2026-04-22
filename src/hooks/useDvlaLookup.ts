@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { supabase, isDemoMode } from '../lib/supabase'
+import { isDemoMode } from '../lib/supabase'
 import type { DvlaLookupResult, DvlaVehicleData } from '../types'
 
-// Mock response used in demo mode (no Supabase needed)
 const mockLookup = (reg: string): DvlaVehicleData => ({
   registration: reg.toUpperCase().replace(/\s+/g, ''),
   make: 'Ford',
@@ -18,7 +17,7 @@ const mockLookup = (reg: string): DvlaVehicleData => ({
 
 export function useDvlaLookup() {
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<DvlaLookupResult | null>(null)
+  const [result,  setResult]  = useState<DvlaLookupResult | null>(null)
 
   const lookup = async (registration: string): Promise<DvlaLookupResult> => {
     if (!registration.trim()) {
@@ -31,28 +30,58 @@ export function useDvlaLookup() {
     try {
       let res: DvlaLookupResult
 
-      if (isDemoMode || !supabase) {
-        // Simulate a small delay in demo mode
-        await new Promise(r => setTimeout(r, 800))
+      if (isDemoMode) {
+        console.log('[DVLA] Demo mode — returning mock data')
+        await new Promise(r => setTimeout(r, 600))
         res = { success: true, data: mockLookup(registration) }
       } else {
-        // Call the Supabase Edge Function
-        const { data, error } = await supabase.functions.invoke('dvla-lookup', {
-          body: { registration },
+        // Read env vars at call time — not at module load time
+        const supabaseUrl  = (window as any).__supabaseUrl
+          || import.meta.env.VITE_SUPABASE_URL
+        const supabaseKey  = (window as any).__supabaseKey
+          || import.meta.env.VITE_SUPABASE_ANON_KEY
+
+        const url = `${supabaseUrl}/functions/v1/dvla-lookup`
+        console.log('[DVLA] Fetching:', url)
+
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 15000)
+
+        const response = await fetch(url, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type':  'application/json',
+            'apikey':        supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({ registration }),
         })
-        if (error) {
-          res = { success: false, error: error.message || 'Lookup failed' }
+
+        clearTimeout(timer)
+        console.log('[DVLA] Status:', response.status)
+
+        if (!response.ok) {
+          const text = await response.text()
+          console.error('[DVLA] Error body:', text)
+          res = { success: false, error: `Server error ${response.status}` }
         } else {
-          res = data as DvlaLookupResult
+          const json = await response.json()
+          console.log('[DVLA] Data:', json)
+          res = json as DvlaLookupResult
         }
       }
 
       setResult(res)
       return res
-    } catch (err) {
+    } catch (err: unknown) {
+      const isAbort = err instanceof Error && err.name === 'AbortError'
+      console.error('[DVLA] Error:', err)
       const res: DvlaLookupResult = {
         success: false,
-        error: 'Network error — please try again',
+        error: isAbort
+          ? 'Request timed out after 15 seconds'
+          : 'Network error — please try again',
       }
       setResult(res)
       return res

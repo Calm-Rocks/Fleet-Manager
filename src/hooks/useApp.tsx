@@ -1,25 +1,29 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import type { Vehicle, ExpenseEntry, IncomeEntry, MileageEntry } from '../types'
+import type { Vehicle, ExpenseEntry, IncomeEntry, MileageEntry, Driver } from '../types'
 import { supabase, isDemoMode } from '../lib/supabase'
 import { useAuth } from './useAuth'
 import { SAMPLE_VEHICLES, SAMPLE_EXPENSES, SAMPLE_INCOME, SAMPLE_MILEAGE } from '../lib/sampleData'
+import { SAMPLE_DRIVERS } from '../lib/sampleDrivers'
 import { uid } from '../utils'
 
 interface AppState {
   vehicles: Vehicle[]
   expenses: ExpenseEntry[]
-  income: IncomeEntry[]
-  mileage: MileageEntry[]
-  loading: boolean
+  income:   IncomeEntry[]
+  mileage:  MileageEntry[]
+  drivers:  Driver[]
+  loading:  boolean
   isDemoMode: boolean
-  saveVehicle: (v: Vehicle) => Promise<void>
+  saveVehicle:   (v: Vehicle) => Promise<void>
   deleteVehicle: (id: string) => Promise<void>
-  addExpense: (e: ExpenseEntry) => Promise<void>
+  addExpense:    (e: ExpenseEntry) => Promise<void>
   deleteExpense: (id: string) => Promise<void>
-  addIncome: (i: IncomeEntry) => Promise<void>
-  deleteIncome: (id: string) => Promise<void>
-  addMileage: (m: MileageEntry) => Promise<void>
+  addIncome:     (i: IncomeEntry) => Promise<void>
+  deleteIncome:  (id: string) => Promise<void>
+  addMileage:    (m: MileageEntry) => Promise<void>
   deleteMileage: (id: string) => Promise<void>
+  saveDriver:    (d: Driver) => Promise<void>
+  deleteDriver:  (id: string) => Promise<void>
 }
 
 const AppContext = createContext<AppState | null>(null)
@@ -30,33 +34,56 @@ export const useApp = (): AppState => {
   return ctx
 }
 
+// ── Get user_id + company_id fresh from Supabase at call time ─────────────────
+// This is called on every save operation. It reads the live session from
+// Supabase's own localStorage key (not our code's state) so it's always
+// accurate regardless of React render cycles.
+async function getIds(): Promise<{ user_id: string; company_id: string } | null> {
+  if (!supabase) return null
+
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.user) {
+    console.error('getIds: no active session')
+    return null
+  }
+
+  const { data: prof, error } = await supabase
+    .from('profiles')
+    .select('company_id')
+    .eq('id', session.user.id)
+    .single()
+
+  if (error || !prof?.company_id) {
+    console.error('getIds: could not resolve company_id', error?.message)
+    return null
+  }
+
+  return { user_id: session.user.id, company_id: prof.company_id }
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, company } = useAuth()
-  const [vehicles, setVehicles]   = useState<Vehicle[]>([])
-  const [expenses, setExpenses]   = useState<ExpenseEntry[]>([])
-  const [income,   setIncome]     = useState<IncomeEntry[]>([])
-  const [mileage,  setMileage]    = useState<MileageEntry[]>([])
-  const [loading,  setLoading]    = useState(true)
+  const { company } = useAuth()
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+  const [expenses, setExpenses] = useState<ExpenseEntry[]>([])
+  const [income,   setIncome]   = useState<IncomeEntry[]>([])
+  const [mileage,  setMileage]  = useState<MileageEntry[]>([])
+  const [drivers,  setDrivers]  = useState<Driver[]>([])
+  const [loading,  setLoading]  = useState(true)
 
-  // ── Helper: stamp user_id + company_id onto new records ───────────────────
-  const stamp = <T extends object>(record: T): T & { user_id: string; company_id: string } => ({
-    ...record,
-    user_id:    user?.id    || 'demo-user-id',
-    company_id: company?.id || 'demo-company-id',
-  })
-
-  // ── Load data scoped to the user's company ────────────────────────────────
+  // ── Load all fleet data when company is known ─────────────────────────────
   useEffect(() => {
     if (isDemoMode) {
       setVehicles(SAMPLE_VEHICLES)
       setExpenses(SAMPLE_EXPENSES)
       setIncome(SAMPLE_INCOME)
       setMileage(SAMPLE_MILEAGE)
+      setDrivers(SAMPLE_DRIVERS)
       setLoading(false)
       return
     }
 
     if (!supabase || !company?.id) {
+      // Don't show loading forever if no company — just show empty state
       setLoading(false)
       return
     }
@@ -65,54 +92,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const load = async () => {
       setLoading(true)
-      const [v, e, i, m] = await Promise.all([
-        supabase!.from('vehicles')       .select('*').eq('company_id', cid).order('created_at', { ascending: false }),
-        supabase!.from('expense_entries').select('*').eq('company_id', cid).order('date',       { ascending: false }),
-        supabase!.from('income_entries') .select('*').eq('company_id', cid).order('date',       { ascending: false }),
-        supabase!.from('mileage_entries').select('*').eq('company_id', cid).order('date',       { ascending: false }),
-      ])
-      if (v.data) setVehicles(v.data)
-      if (e.data) setExpenses(e.data)
-      if (i.data) setIncome(i.data)
-      if (m.data) setMileage(m.data)
-      setLoading(false)
+      try {
+        const [v, e, i, m, d] = await Promise.all([
+          supabase!.from('vehicles')       .select('*').eq('company_id', cid).order('created_at', { ascending: false }),
+          supabase!.from('expense_entries').select('*').eq('company_id', cid).order('date',       { ascending: false }),
+          supabase!.from('income_entries') .select('*').eq('company_id', cid).order('date',       { ascending: false }),
+          supabase!.from('mileage_entries').select('*').eq('company_id', cid).order('date',       { ascending: false }),
+          supabase!.from('drivers')        .select('*').eq('company_id', cid).order('last_name',  { ascending: true }),
+        ])
+        if (v.error) console.error('vehicles load error:', v.error.message)
+        if (e.error) console.error('expenses load error:', e.error.message)
+        if (i.error) console.error('income load error:',   i.error.message)
+        if (m.error) console.error('mileage load error:',  m.error.message)
+        if (d.error) console.error('drivers load error:',  d.error.message)
+        if (v.data) setVehicles(v.data)
+        if (e.data) setExpenses(e.data)
+        if (i.data) setIncome(i.data)
+        if (m.data) setMileage(m.data)
+        if (d.data) setDrivers(d.data)
+      } finally {
+        setLoading(false)
+      }
     }
 
     load()
-  }, [company?.id]) // re-fetch if user switches company
+  }, [company?.id]) // Re-runs whenever company changes (login, switch company)
 
-  // ── Vehicles ───────────────────────────────────────────────────────────────
+  // ── Vehicles ──────────────────────────────────────────────────────────────
   const saveVehicle = useCallback(async (v: Vehicle) => {
     const isNew = !vehicles.find(x => x.id === v.id)
-    if (isDemoMode) {
-      setVehicles(prev =>
-        isNew ? [...prev, { ...v, id: v.id || uid() }] : prev.map(x => x.id === v.id ? v : x)
-      )
+    const tempId = v.id || uid()
+
+    // Optimistic UI update
+    if (isNew) setVehicles(prev => [{ ...v, id: tempId }, ...prev])
+    else       setVehicles(prev => prev.map(x => x.id === v.id ? v : x))
+
+    if (isDemoMode || !supabase) return
+
+    const ids = await getIds()
+    if (!ids) {
+      if (isNew) setVehicles(prev => prev.filter(x => x.id !== tempId))
       return
     }
-    if (!supabase) return
-    const record = stamp(v)
+
+    const record = { ...v, id: tempId, ...ids }
+
     if (isNew) {
-      const { data } = await supabase.from('vehicles').insert(record).select().single()
-      if (data) setVehicles(prev => [data, ...prev])
+      const { data, error } = await supabase.from('vehicles').insert(record).select().single()
+      if (error) {
+        console.error('saveVehicle error:', error.message)
+        setVehicles(prev => prev.filter(x => x.id !== tempId))
+        return
+      }
+      if (data) setVehicles(prev => prev.map(x => x.id === tempId ? data : x))
     } else {
-      const { data } = await supabase.from('vehicles').update(record).eq('id', v.id).select().single()
+      const { data, error } = await supabase.from('vehicles').update(record).eq('id', v.id).select().single()
+      if (error) { console.error('updateVehicle error:', error.message); return }
       if (data) setVehicles(prev => prev.map(x => x.id === v.id ? data : x))
     }
-  }, [vehicles, user, company])
+  }, [vehicles])
 
   const deleteVehicle = useCallback(async (id: string) => {
     setVehicles(prev => prev.filter(v => v.id !== id))
     if (isDemoMode || !supabase) return
-    await supabase.from('vehicles').delete().eq('id', id)
+    const { error } = await supabase.from('vehicles').delete().eq('id', id)
+    if (error) console.error('deleteVehicle error:', error.message)
   }, [])
 
-  // ── Expenses ───────────────────────────────────────────────────────────────
+  // ── Expenses ──────────────────────────────────────────────────────────────
   const addExpense = useCallback(async (e: ExpenseEntry) => {
-    if (isDemoMode || !supabase) { setExpenses(prev => [e, ...prev]); return }
-    const { data } = await supabase.from('expense_entries').insert(stamp(e)).select().single()
-    if (data) setExpenses(prev => [data, ...prev])
-  }, [user, company])
+    setExpenses(prev => [e, ...prev])
+    if (isDemoMode || !supabase) return
+
+    const ids = await getIds()
+    if (!ids) { setExpenses(prev => prev.filter(x => x.id !== e.id)); return }
+
+    const { data, error } = await supabase
+      .from('expense_entries').insert({ ...e, ...ids }).select().single()
+    if (error) {
+      console.error('addExpense error:', error.message)
+      setExpenses(prev => prev.filter(x => x.id !== e.id))
+      return
+    }
+    if (data) setExpenses(prev => prev.map(x => x.id === e.id ? data : x))
+  }, [])
 
   const deleteExpense = useCallback(async (id: string) => {
     setExpenses(prev => prev.filter(e => e.id !== id))
@@ -120,12 +183,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await supabase.from('expense_entries').delete().eq('id', id)
   }, [])
 
-  // ── Income ─────────────────────────────────────────────────────────────────
+  // ── Income ────────────────────────────────────────────────────────────────
   const addIncome = useCallback(async (i: IncomeEntry) => {
-    if (isDemoMode || !supabase) { setIncome(prev => [i, ...prev]); return }
-    const { data } = await supabase.from('income_entries').insert(stamp(i)).select().single()
-    if (data) setIncome(prev => [data, ...prev])
-  }, [user, company])
+    setIncome(prev => [i, ...prev])
+    if (isDemoMode || !supabase) return
+
+    const ids = await getIds()
+    if (!ids) { setIncome(prev => prev.filter(x => x.id !== i.id)); return }
+
+    const { data, error } = await supabase
+      .from('income_entries').insert({ ...i, ...ids }).select().single()
+    if (error) {
+      console.error('addIncome error:', error.message)
+      setIncome(prev => prev.filter(x => x.id !== i.id))
+      return
+    }
+    if (data) setIncome(prev => prev.map(x => x.id === i.id ? data : x))
+  }, [])
 
   const deleteIncome = useCallback(async (id: string) => {
     setIncome(prev => prev.filter(i => i.id !== id))
@@ -133,34 +207,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await supabase.from('income_entries').delete().eq('id', id)
   }, [])
 
-  // ── Mileage ────────────────────────────────────────────────────────────────
+  // ── Mileage ───────────────────────────────────────────────────────────────
   const addMileage = useCallback(async (m: MileageEntry) => {
-    // Optimistically update vehicle mileage
-    const updateVehicleMileage = (endMileage: number | string) => {
-      setVehicles(prev => prev.map(v =>
-        v.id === m.vehicle_id && parseInt(String(endMileage)) > parseInt(String(v.current_mileage))
-          ? { ...v, current_mileage: endMileage }
-          : v
-      ))
-    }
+    setMileage(prev => [m, ...prev])
+    setVehicles(prev => prev.map(v =>
+      v.id === m.vehicle_id && parseInt(String(m.end_mileage)) > parseInt(String(v.current_mileage))
+        ? { ...v, current_mileage: m.end_mileage } : v
+    ))
+    if (isDemoMode || !supabase) return
 
-    if (isDemoMode || !supabase) {
-      setMileage(prev => [m, ...prev])
-      updateVehicleMileage(m.end_mileage)
+    const ids = await getIds()
+    if (!ids) { setMileage(prev => prev.filter(x => x.id !== m.id)); return }
+
+    const { data, error } = await supabase
+      .from('mileage_entries').insert({ ...m, ...ids }).select().single()
+    if (error) {
+      console.error('addMileage error:', error.message)
+      setMileage(prev => prev.filter(x => x.id !== m.id))
       return
     }
-
-    const { data } = await supabase.from('mileage_entries').insert(stamp(m)).select().single()
     if (data) {
-      setMileage(prev => [data, ...prev])
-      updateVehicleMileage(m.end_mileage)
-      // Also persist updated mileage on the vehicle record
+      setMileage(prev => prev.map(x => x.id === m.id ? data : x))
       const vehicle = vehicles.find(v => v.id === m.vehicle_id)
       if (vehicle && parseInt(String(m.end_mileage)) > parseInt(String(vehicle.current_mileage))) {
         await supabase.from('vehicles').update({ current_mileage: m.end_mileage }).eq('id', m.vehicle_id)
       }
     }
-  }, [vehicles, user, company])
+  }, [vehicles])
 
   const deleteMileage = useCallback(async (id: string) => {
     setMileage(prev => prev.filter(m => m.id !== id))
@@ -168,13 +241,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await supabase.from('mileage_entries').delete().eq('id', id)
   }, [])
 
+  // ── Drivers ───────────────────────────────────────────────────────────────
+  const saveDriver = useCallback(async (d: Driver) => {
+    const isNew = !drivers.find(x => x.id === d.id)
+    const tempId = d.id || uid()
+
+    if (isNew) setDrivers(prev => [...prev, { ...d, id: tempId }].sort((a, b) => a.last_name.localeCompare(b.last_name)))
+    else       setDrivers(prev => prev.map(x => x.id === d.id ? d : x))
+
+    if (isDemoMode || !supabase) return
+
+    const ids = await getIds()
+    if (!ids) {
+      if (isNew) setDrivers(prev => prev.filter(x => x.id !== tempId))
+      return
+    }
+
+    const record = { ...d, id: tempId, ...ids }
+
+    if (isNew) {
+      const { data, error } = await supabase.from('drivers').insert(record).select().single()
+      if (error) {
+        console.error('saveDriver error:', error.message)
+        setDrivers(prev => prev.filter(x => x.id !== tempId))
+        return
+      }
+      if (data) setDrivers(prev =>
+        prev.map(x => x.id === tempId ? data : x).sort((a, b) => a.last_name.localeCompare(b.last_name))
+      )
+    } else {
+      const { data, error } = await supabase.from('drivers').update(record).eq('id', d.id).select().single()
+      if (error) { console.error('updateDriver error:', error.message); return }
+      if (data) setDrivers(prev => prev.map(x => x.id === d.id ? data : x))
+    }
+  }, [drivers])
+
+  const deleteDriver = useCallback(async (id: string) => {
+    setDrivers(prev => prev.filter(d => d.id !== id))
+    if (isDemoMode || !supabase) return
+    const { error } = await supabase.from('drivers').delete().eq('id', id)
+    if (error) console.error('deleteDriver error:', error.message)
+  }, [])
+
   return (
     <AppContext.Provider value={{
-      vehicles, expenses, income, mileage, loading, isDemoMode,
+      vehicles, expenses, income, mileage, drivers, loading, isDemoMode,
       saveVehicle,  deleteVehicle,
       addExpense,   deleteExpense,
       addIncome,    deleteIncome,
       addMileage,   deleteMileage,
+      saveDriver,   deleteDriver,
     }}>
       {children}
     </AppContext.Provider>

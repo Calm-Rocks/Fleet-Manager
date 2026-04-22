@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { PageHeader, Divider } from '../components/UI'
 import type { Integration } from '../types'
@@ -161,17 +161,23 @@ export default function Settings() {
 // ── Profile tab ───────────────────────────────────────────────────────────────
 function ProfileTab() {
   const { profile, user, updateProfile, isDemoMode } = useAuth()
-  const [form, setForm] = useState({
-    full_name: profile?.full_name || '',
-  })
+  // Track edits separately — only populated when user types something
+  const [edits, setEdits] = useState<{ full_name?: string }>({})
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  // Clear edits when profile reloads (e.g. after save, or on navigation back)
+  useEffect(() => { setEdits({}) }, [profile?.id])
+
+  // Display value: edited value takes priority, then loaded profile value
+  const fullName = edits.full_name !== undefined ? edits.full_name : (profile?.full_name || '')
+
   const save = async () => {
     setSaving(true)
-    await updateProfile(form)
+    await updateProfile({ full_name: fullName })
     setSaving(false)
     setSaved(true)
+    setEdits({})
     setTimeout(() => setSaved(false), 2500)
   }
 
@@ -183,8 +189,8 @@ function ProfileTab() {
         <label className="fm-label">Full name</label>
         <input
           className="fm-input"
-          value={form.full_name}
-          onChange={e => setForm(f => ({ ...f, full_name: e.target.value }))}
+          value={fullName}
+          onChange={e => setEdits(prev => ({ ...prev, full_name: e.target.value }))}
           placeholder="Your name"
         />
       </div>
@@ -213,30 +219,47 @@ function ProfileTab() {
 }
 
 // ── Company tab ───────────────────────────────────────────────────────────────
+type CompanyForm = {
+  name: string; address_line1: string; address_line2: string
+  city: string; postcode: string; phone: string; email: string
+  vat_number: string; companies_house_number: string
+}
+
 function CompanyTab() {
   const { company, updateCompany, isDemoMode } = useAuth()
-  const [form, setForm] = useState({
-    name:                    company?.name || '',
-    address_line1:           company?.address_line1 || '',
-    address_line2:           company?.address_line2 || '',
-    city:                    company?.city || '',
-    postcode:                company?.postcode || '',
-    phone:                   company?.phone || '',
-    email:                   company?.email || '',
-    vat_number:              company?.vat_number || '',
-    companies_house_number:  company?.companies_house_number || '',
-  })
+  // Track only what the user has edited — everything else reads from company directly
+  const [edits, setEdits] = useState<Partial<CompanyForm>>({})
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm(f => ({ ...f, [k]: e.target.value }))
+  // Clear edits when company reloads
+  useEffect(() => { setEdits({}) }, [company?.id])
+
+  // For each field: edited value takes priority, then loaded company value
+  const val = (k: keyof CompanyForm): string =>
+    edits[k] !== undefined ? (edits[k] as string) : ((company?.[k as keyof typeof company] as string) || '')
+
+  const set = (k: keyof CompanyForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setEdits(prev => ({ ...prev, [k]: e.target.value }))
 
   const save = async () => {
     setSaving(true)
-    await updateCompany(form)
+    // Merge edits onto current company values and save the full object
+    const updates: Partial<CompanyForm> = {
+      name:                   val('name'),
+      address_line1:          val('address_line1'),
+      address_line2:          val('address_line2'),
+      city:                   val('city'),
+      postcode:               val('postcode'),
+      phone:                  val('phone'),
+      email:                  val('email'),
+      vat_number:             val('vat_number'),
+      companies_house_number: val('companies_house_number'),
+    }
+    await updateCompany(updates)
     setSaving(false)
     setSaved(true)
+    setEdits({})
     setTimeout(() => setSaved(false), 2500)
   }
 
@@ -246,7 +269,7 @@ function CompanyTab() {
 
       <div className="mb-3.5">
         <label className="fm-label">Company name *</label>
-        <input className="fm-input" value={form.name} onChange={set('name')} placeholder="Smith Logistics Ltd" />
+        <input className="fm-input" value={val('name')} onChange={set('name')} placeholder="Smith Logistics Ltd" />
       </div>
 
       <Divider />
@@ -254,20 +277,20 @@ function CompanyTab() {
 
       <div className="mb-3.5">
         <label className="fm-label">Address line 1</label>
-        <input className="fm-input" value={form.address_line1} onChange={set('address_line1')} placeholder="123 Industrial Way" />
+        <input className="fm-input" value={val('address_line1')} onChange={set('address_line1')} placeholder="123 Industrial Way" />
       </div>
       <div className="mb-3.5">
         <label className="fm-label">Address line 2</label>
-        <input className="fm-input" value={form.address_line2} onChange={set('address_line2')} placeholder="Unit 4" />
+        <input className="fm-input" value={val('address_line2')} onChange={set('address_line2')} placeholder="Unit 4" />
       </div>
       <div className="grid grid-cols-2 gap-3 mb-3.5">
         <div>
           <label className="fm-label">City</label>
-          <input className="fm-input" value={form.city} onChange={set('city')} placeholder="Sheffield" />
+          <input className="fm-input" value={val('city')} onChange={set('city')} placeholder="Sheffield" />
         </div>
         <div>
           <label className="fm-label">Postcode</label>
-          <input className="fm-input" value={form.postcode} onChange={set('postcode')} placeholder="S1 1AA" />
+          <input className="fm-input" value={val('postcode')} onChange={set('postcode')} placeholder="S1 1AA" />
         </div>
       </div>
 
@@ -277,11 +300,11 @@ function CompanyTab() {
       <div className="grid grid-cols-2 gap-3 mb-3.5">
         <div>
           <label className="fm-label">Phone</label>
-          <input className="fm-input" value={form.phone} onChange={set('phone')} placeholder="0114 000 0000" />
+          <input className="fm-input" value={val('phone')} onChange={set('phone')} placeholder="0114 000 0000" />
         </div>
         <div>
           <label className="fm-label">Email</label>
-          <input className="fm-input" type="email" value={form.email} onChange={set('email')} placeholder="info@company.co.uk" />
+          <input className="fm-input" type="email" value={val('email')} onChange={set('email')} placeholder="info@company.co.uk" />
         </div>
       </div>
 
@@ -291,11 +314,11 @@ function CompanyTab() {
       <div className="grid grid-cols-2 gap-3 mb-5">
         <div>
           <label className="fm-label">VAT number</label>
-          <input className="fm-input" value={form.vat_number} onChange={set('vat_number')} placeholder="GB123456789" />
+          <input className="fm-input" value={val('vat_number')} onChange={set('vat_number')} placeholder="GB123456789" />
         </div>
         <div>
           <label className="fm-label">Companies House no.</label>
-          <input className="fm-input" value={form.companies_house_number} onChange={set('companies_house_number')} placeholder="12345678" />
+          <input className="fm-input" value={val('companies_house_number')} onChange={set('companies_house_number')} placeholder="12345678" />
         </div>
       </div>
 

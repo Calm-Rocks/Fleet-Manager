@@ -58,6 +58,8 @@ export interface IncomeEntry {
   created_at?: string
 }
 
+// ── Reminders ─────────────────────────────────────────────────────────────────
+
 export type ReminderStatus = 'overdue' | 'soon' | 'ok' | 'unknown'
 
 export interface ReminderItem {
@@ -67,6 +69,46 @@ export interface ReminderItem {
   status: ReminderStatus
   days: number | null
 }
+
+export interface DriverReminderItem {
+  driver: Driver
+  type: string
+  date: string
+  status: ReminderStatus
+  days: number | null
+}
+
+// ── Drivers ───────────────────────────────────────────────────────────────────
+
+export type LicenceCategory =
+  | 'AM' | 'A1' | 'A2' | 'A'
+  | 'B' | 'B1' | 'BE'
+  | 'C1' | 'C1E' | 'C' | 'CE'
+  | 'D1' | 'D1E' | 'D' | 'DE'
+
+export interface Driver {
+  id: string
+  user_id?: string
+  company_id?: string
+  first_name: string
+  last_name: string
+  email?: string
+  phone?: string
+  date_of_birth?: string
+  licence_number?: string
+  licence_categories?: LicenceCategory[]
+  licence_expiry?: string
+  licence_points?: number
+  medical_expiry?: string
+  cpc_expiry?: string
+  tacho_card_expiry?: string
+  assigned_vehicle_id?: string
+  notes?: string
+  active: boolean
+  created_at?: string
+}
+
+// ── Depreciation ──────────────────────────────────────────────────────────────
 
 export interface DepreciationResult {
   currentValue: number
@@ -136,7 +178,7 @@ export interface DvlaLookupResult {
   error?: string
 }
 
-// ── Integration status ─────────────────────────────────────────────────────────
+// ── Integrations ───────────────────────────────────────────────────────────────
 
 export type IntegrationStatus = 'connected' | 'disconnected' | 'coming_soon'
 

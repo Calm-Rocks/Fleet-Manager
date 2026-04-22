@@ -24,10 +24,54 @@ const empty: Omit<Vehicle, 'id'> = {
   service_due_date: '',
 }
 
+// ── UK reg plate → first MOT due date ────────────────────────────────────────
+// Current UK format (since 2001): AB51 CDE
+//   Chars 3-4 = age identifier number
+//   01–50 → registered in March of that year  (e.g. 23 = March 2023)
+//   51–99 → registered in September           (e.g. 73 = September 2023)
+// First MOT is due 3 years after first registration.
+// Returns ISO date string or null if reg format not recognised.
+
+function calcMotExpiryFromReg(reg: string): string | null {
+  try {
+    const clean = reg.replace(/\s+/g, '').toUpperCase()
+
+    // Must be 7 chars and match current plate format: 2 letters, 2 digits, 3 letters
+    if (!/^[A-Z]{2}\d{2}[A-Z]{3}$/.test(clean)) return null
+
+    const ageId = parseInt(clean.slice(2, 4), 10)
+    if (isNaN(ageId)) return null
+
+    let year: number
+    let month: number // 1-based
+
+    if (ageId >= 1 && ageId <= 50) {
+      // March registration — e.g. 23 = March 2023
+      year  = 2000 + ageId
+      month = 3
+    } else if (ageId >= 51 && ageId <= 99) {
+      // September registration — e.g. 73 = September 2023
+      year  = 2000 + (ageId - 50)
+      month = 9
+    } else {
+      return null
+    }
+
+    // First MOT due exactly 3 years after first registration month
+    const motYear  = year + 3
+    const motMonth = String(month).padStart(2, '0')
+    const lastDay  = new Date(motYear, month, 0).getDate() // last day of that month
+    return `${motYear}-${motMonth}-${lastDay}`
+  } catch {
+    return null
+  }
+}
+
 export const VehicleModal: React.FC<Props> = ({ vehicle, onSave, onClose }) => {
   const [form, setForm] = useState<Omit<Vehicle, 'id'>>(vehicle ? { ...vehicle } : { ...empty })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [dvlaApplied, setDvlaApplied] = useState(false)
+  const [motCalculated, setMotCalculated] = useState(false)
   const { lookup, loading: dvlaLoading, result: dvlaResult } = useDvlaLookup()
 
   const set = (k: keyof typeof form) =>
@@ -41,18 +85,34 @@ export const VehicleModal: React.FC<Props> = ({ vehicle, onSave, onClose }) => {
       return
     }
     setErrors({})
+    setMotCalculated(false)
     const res = await lookup(form.registration)
+
     if (res.success && res.data) {
-      // Pre-fill what the DVLA gives us — never overwrite mileage or price
+      const data = res.data
+      let motExpiry = data.motExpiryDate || ''
+      let motWasCalculated = false
+
+      // If DVLA has no MOT expiry, calculate from reg plate (new vehicle, <3 years)
+      if (!motExpiry) {
+        const calculated = calcMotExpiryFromReg(data.registration)
+        if (calculated) {
+          motExpiry = calculated
+          motWasCalculated = true
+        }
+      }
+
       setForm(f => ({
         ...f,
-        registration: res.data!.registration,
-        make:         res.data!.make         || f.make,
-        year:         res.data!.yearOfManufacture || f.year,
-        mot_expiry:   res.data!.motExpiryDate || f.mot_expiry,
-        tax_expiry:   res.data!.taxDueDate    || f.tax_expiry,
+        registration: data.registration,
+        make:         data.make              || f.make,
+        year:         data.yearOfManufacture || f.year,
+        mot_expiry:   motExpiry              || f.mot_expiry,
+        tax_expiry:   data.taxDueDate        || f.tax_expiry,
       }))
+
       setDvlaApplied(true)
+      setMotCalculated(motWasCalculated)
     }
   }
 
@@ -101,6 +161,7 @@ export const VehicleModal: React.FC<Props> = ({ vehicle, onSave, onClose }) => {
               onChange={e => {
                 setForm(f => ({ ...f, registration: e.target.value }))
                 setDvlaApplied(false)
+                setMotCalculated(false)
               }}
               placeholder="AB12 CDE"
             />
@@ -125,10 +186,12 @@ export const VehicleModal: React.FC<Props> = ({ vehicle, onSave, onClose }) => {
             </p>
           )}
           {dvlaResult?.success && dvlaApplied && (
-            <div className="mt-2 text-[12px] text-[#166534] bg-[#F0FDF4] rounded-lg px-3 py-2 border border-[#BBF7D0]">
-              ✓ Details filled from DVLA
-              {dvlaResult.data && (dvlaResult as any)._mock && (
-                <span className="text-[#9B9890] ml-1">(demo — mock data)</span>
+            <div className="mt-2 text-[12px] text-[#166534] bg-[#F0FDF4] rounded-lg px-3 py-2 border border-[#BBF7D0] space-y-0.5">
+              <p>✓ Details filled from DVLA</p>
+              {motCalculated && (
+                <p className="text-[#6B6860]">
+                  MOT not yet recorded by DVLA — estimated first due date calculated from reg plate (3 years from registration). Verify and adjust if needed.
+                </p>
               )}
             </div>
           )}
@@ -137,7 +200,6 @@ export const VehicleModal: React.FC<Props> = ({ vehicle, onSave, onClose }) => {
 
       {/* ── Manual fields ──────────────────────────────────────────────────── */}
       {vehicle && (
-        // When editing, show reg inline (not the lookup panel)
         <FormGroup label="Registration">
           <input
             className="fm-input font-mono font-bold tracking-widest uppercase"
@@ -197,11 +259,15 @@ export const VehicleModal: React.FC<Props> = ({ vehicle, onSave, onClose }) => {
       <Divider />
       <p className="text-[11px] font-semibold text-[#9B9890] uppercase tracking-[0.5px] mb-3">
         Compliance dates
-        {dvlaApplied && <span className="ml-2 text-[#166534] normal-case tracking-normal">— MOT & tax pre-filled from DVLA</span>}
+        {dvlaApplied && (
+          <span className="ml-2 text-[#166534] normal-case tracking-normal">
+            — {motCalculated ? 'tax from DVLA, MOT estimated from reg plate' : 'MOT & tax from DVLA'}
+          </span>
+        )}
       </p>
 
       <FormRow>
-        <FormGroup label="MOT expiry">
+        <FormGroup label={`MOT expiry${motCalculated ? ' (estimated)' : ''}`}>
           <input className="fm-input" type="date" value={form.mot_expiry} onChange={set('mot_expiry')} />
         </FormGroup>
         <FormGroup label="Tax expiry">

@@ -7,6 +7,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 
 import Dashboard    from './pages/Dashboard'
 import Vehicles     from './pages/Vehicles'
+import DriversPage  from './pages/Drivers'
 import Reminders    from './pages/Reminders'
 import MileagePage  from './pages/Mileage'
 import ExpensesPage from './pages/Expenses'
@@ -16,31 +17,36 @@ import SignIn       from './pages/SignIn'
 import SignUp       from './pages/SignUp'
 
 const NAV_ITEMS = [
-  { path: '/',          icon: '▤',  label: 'Dashboard'  },
-  { path: '/vehicles',  icon: '🚐', label: 'Vehicles'   },
-  { path: '/reminders', icon: '⏰', label: 'Reminders'  },
-  { path: '/mileage',   icon: '📍', label: 'Mileage'    },
-  { path: '/expenses',  icon: '📋', label: 'Expenses'   },
-  { path: '/income',    icon: '💷', label: 'Income'     },
+  { path: '/',          icon: '▤',  label: 'Dashboard' },
+  { path: '/vehicles',  icon: '🚐', label: 'Vehicles'  },
+  { path: '/drivers',   icon: '👤', label: 'Drivers'   },
+  { path: '/reminders', icon: '⏰', label: 'Reminders' },
+  { path: '/mileage',   icon: '📍', label: 'Mileage'   },
+  { path: '/expenses',  icon: '📋', label: 'Expenses'  },
+  { path: '/income',    icon: '💷', label: 'Income'    },
 ]
 
-// ── Authenticated shell (sidebar + main) ──────────────────────────────────────
 function AppShell() {
-  const { vehicles } = useApp()
+  const { vehicles, drivers } = useApp()
   const { profile, company, signOut, isDemoMode } = useAuth()
 
-  const overdueCount = vehicles.filter(v =>
+  // Combined overdue count — vehicles + drivers
+  const vehicleOverdue = vehicles.filter(v =>
     ['mot_expiry', 'tax_expiry', 'insurance_expiry', 'service_due_date'].some(
       k => reminderStatus(v[k as keyof typeof v] as string) === 'overdue'
     )
   ).length
 
+  const driverOverdue = drivers.filter(d =>
+    d.active && ['licence_expiry', 'medical_expiry', 'cpc_expiry', 'tacho_card_expiry'].some(
+      k => reminderStatus(d[k as keyof typeof d] as string) === 'overdue'
+    )
+  ).length
+
+  const overdueCount = vehicleOverdue + driverOverdue
+
   const initials = (profile?.full_name || 'U')
-    .split(' ')
-    .map(n => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
+    .split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#F8F7F4]">
@@ -83,7 +89,7 @@ function AppShell() {
           ))}
         </nav>
 
-        {/* User / settings footer */}
+        {/* Settings + user footer */}
         <div className="border-t border-[#E5E3DD] p-2">
           <NavLink
             to="/settings"
@@ -92,8 +98,6 @@ function AppShell() {
             <span className="w-[18px] text-center text-[15px]">⚙</span>
             <span>Settings</span>
           </NavLink>
-
-          {/* User pill */}
           <div className="flex items-center gap-2.5 px-2.5 py-2 mt-1">
             <div className="w-6 h-6 rounded-full bg-[#1A3A5C] flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
               {initials}
@@ -102,9 +106,7 @@ function AppShell() {
               <p className="text-[12px] font-medium text-[#1A1916] truncate">
                 {profile?.full_name || profile?.email || 'User'}
               </p>
-              {isDemoMode && (
-                <p className="text-[10px] text-[#9B9890]">Demo mode</p>
-              )}
+              {isDemoMode && <p className="text-[10px] text-[#9B9890]">Demo mode</p>}
             </div>
             <button
               onClick={signOut}
@@ -121,33 +123,34 @@ function AppShell() {
       <main className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-y-auto">
           <Routes>
-            <Route path="/"            element={<Dashboard />} />
-            <Route path="/vehicles/*"  element={<Vehicles />} />
-            <Route path="/reminders"   element={<Reminders />} />
-            <Route path="/mileage"     element={<MileagePage />} />
-            <Route path="/expenses"    element={<ExpensesPage />} />
-            <Route path="/income"      element={<IncomePage />} />
-            <Route path="/settings/*"  element={<Settings />} />
-            <Route path="*"            element={<Navigate to="/" replace />} />
+            <Route path="/"           element={<Dashboard />} />
+            <Route path="/vehicles/*" element={<Vehicles />} />
+            <Route path="/drivers"    element={<DriversPage />} />
+            <Route path="/reminders"  element={<Reminders />} />
+            <Route path="/mileage"    element={<MileagePage />} />
+            <Route path="/expenses"   element={<ExpensesPage />} />
+            <Route path="/income"     element={<IncomePage />} />
+            <Route path="/settings/*" element={<Settings />} />
+            <Route path="*"           element={<Navigate to="/" replace />} />
           </Routes>
         </div>
 
         {/* ── Mobile bottom nav ─────────────────────────────────────────── */}
-        <nav className="md:hidden flex border-t border-[#E5E3DD] bg-white">
+        <nav className="md:hidden flex border-t border-[#E5E3DD] bg-white overflow-x-auto">
           {[...NAV_ITEMS, { path: '/settings', icon: '⚙', label: 'Settings' }].map(item => (
             <NavLink
               key={item.path}
               to={item.path}
               end={item.path === '/'}
               className={({ isActive }) =>
-                `flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] font-medium transition-colors relative
+                `flex-shrink-0 flex flex-col items-center gap-0.5 py-2 px-3 text-[10px] font-medium transition-colors relative
                  ${isActive ? 'text-[#2563EB]' : 'text-[#6B6860]'}`
               }
             >
               <span className="text-[17px] leading-none">{item.icon}</span>
               <span>{item.label}</span>
               {item.path === '/reminders' && overdueCount > 0 && (
-                <span className="absolute top-1 right-1/4 bg-[#991B1B] text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                <span className="absolute top-1 right-1 bg-[#991B1B] text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
                   {overdueCount}
                 </span>
               )}
@@ -159,7 +162,6 @@ function AppShell() {
   )
 }
 
-// ── Root app — handles auth gating ────────────────────────────────────────────
 export default function App() {
   const { loading } = useAuth()
 
@@ -173,11 +175,8 @@ export default function App() {
 
   return (
     <Routes>
-      {/* Public routes */}
       <Route path="/signin" element={<SignIn />} />
       <Route path="/signup" element={<SignUp />} />
-
-      {/* Protected shell — all app routes live inside */}
       <Route
         path="/*"
         element={
